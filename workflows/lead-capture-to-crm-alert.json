@@ -1,0 +1,617 @@
+{
+  "name": "Lead Capture to Sheet + Slack Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Lead Capture\nPOST signed JSON to the webhook URL.\n\nRequired: env WEBHOOK_SECRET, NODE_FUNCTION_ALLOW_BUILTIN=crypto, N8N_BLOCK_ENV_ACCESS_IN_NODE=false.\n\nReplace every YOUR_* value. See docs/lead-capture-to-crm-alert.md.",
+        "width": 460,
+        "height": 300
+      },
+      "id": "e415d344-cb9c-4685-87ac-c674a2110e28",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-capture",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "88f578d2-82aa-48df-8227-87d0e285db7a",
+      "name": "Lead Form Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verifies an HMAC-SHA256 signature over \"<X-Timestamp>.<raw body>\".\n// Required headers: X-Timestamp (unix seconds), X-Signature (\"sha256=<hex>\").\n// Required env var: WEBHOOK_SECRET (also set NODE_FUNCTION_ALLOW_BUILTIN=crypto).\nconst crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst headers = $input.first().json.headers || {};\nconst fail = (reason) => [{ json: { valid: false, reason } }];\n\nconst secret = $env.WEBHOOK_SECRET;\nif (!secret) return fail('server_misconfigured'); // fail closed\n\nconst timestamp = headers['x-timestamp'];\nconst provided = String(headers['x-signature'] || '').replace(/^sha256=/, '');\nif (!timestamp || !provided) return fail('missing_signature_headers');\n\nconst skew = Math.abs(Date.now() / 1000 - Number(timestamp));\nif (!Number.isFinite(skew) || skew > MAX_SKEW_SECONDS) return fail('stale_timestamp');\n\nconst raw = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst expected = crypto\n  .createHmac('sha256', secret)\n  .update(timestamp + '.')\n  .update(raw)\n  .digest('hex');\n\nconst a = Buffer.from(provided, 'hex');\nconst b = Buffer.from(expected, 'hex');\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return fail('bad_signature');\n\nlet payload;\ntry {\n  payload = JSON.parse(raw.toString('utf8'));\n} catch (e) {\n  return fail('invalid_json');\n}\nreturn [{ json: { valid: true, payload } }];"
+      },
+      "id": "dfb2653a-2fd4-43d2-957b-96e30648d0c4",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5fb9192f-85ca-4bbd-b217-565940e78550",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d00063a-07f2-4af2-a674-9f691e6cbdcf",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"error\": \"unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "8e3e20e3-c787-4fa8-a908-92961092f874",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9e76b493-5c7f-4f08-8b25-e6632b82d4eb",
+              "name": "email",
+              "value": "={{ String($json.payload.email || '').trim().toLowerCase() }}",
+              "type": "string"
+            },
+            {
+              "id": "1901fe04-488a-4a51-a0f0-8397cc9ef1c9",
+              "name": "name",
+              "value": "={{ String($json.payload.name || '').trim().slice(0, 120) }}",
+              "type": "string"
+            },
+            {
+              "id": "da533fc4-d181-46c9-9435-0e9a2b6849fd",
+              "name": "phone",
+              "value": "={{ String($json.payload.phone || '').trim().slice(0, 40) }}",
+              "type": "string"
+            },
+            {
+              "id": "03e29a40-4a67-4e7f-b570-9ac971961db3",
+              "name": "company",
+              "value": "={{ String($json.payload.company || '').trim().slice(0, 120) }}",
+              "type": "string"
+            },
+            {
+              "id": "232e2b6d-e593-45b7-8f31-2adf7b43288a",
+              "name": "message",
+              "value": "={{ String($json.payload.message || '').trim().slice(0, 500) }}",
+              "type": "string"
+            },
+            {
+              "id": "b012be77-eae5-4b82-814e-c867d82997ca",
+              "name": "source",
+              "value": "={{ String($json.payload.source || 'web-form').trim().slice(0, 60) }}",
+              "type": "string"
+            },
+            {
+              "id": "616d9e19-667e-488a-9307-c76129236247",
+              "name": "status",
+              "value": "New",
+              "type": "string"
+            },
+            {
+              "id": "2d060d2a-02cc-4ae8-a51c-5d01679b02e7",
+              "name": "received_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5ff7b310-88f9-4636-9207-1bddc66b420a",
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cbc2104e-9c37-4be5-b058-640e38b105eb",
+              "leftValue": "={{ /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test($json.email) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3094630d-6a3a-46ec-a1e8-d493d62cc571",
+      "name": "Email Looks Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"error\": \"invalid_email\" } }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "d5d2e385-3c15-4791-a8aa-790e77f1fcb3",
+      "name": "Respond 422",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $json.email }}",
+            "name": "={{ $json.name }}",
+            "phone": "={{ $json.phone }}",
+            "company": "={{ $json.company }}",
+            "message": "={{ $json.message }}",
+            "source": "={{ $json.source }}",
+            "status": "={{ $json.status }}",
+            "received_at": "={{ $json.received_at }}"
+          },
+          "matchingColumns": [
+            "email"
+          ],
+          "schema": [
+            {
+              "id": "email",
+              "displayName": "email",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "name",
+              "displayName": "name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "phone",
+              "displayName": "phone",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "company",
+              "displayName": "company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "source",
+              "displayName": "source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "received_at",
+              "displayName": "received_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "cellFormat": "RAW"
+        }
+      },
+      "id": "8a479750-7406-443a-8131-6f8eef02c0c8",
+      "name": "Upsert Lead Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_GOOGLE_SHEETS_CRED"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales-leads"
+        },
+        "text": "=:bust_in_silhouette: *New lead* from {{ $('Normalize Lead').item.json.source }}\nName: {{ $('Normalize Lead').item.json.name }}\nCompany: {{ $('Normalize Lead').item.json.company }}\nEmail: {{ $('Normalize Lead').item.json.email }}\nMessage: {{ $('Normalize Lead').item.json.message }}",
+        "otherOptions": {}
+      },
+      "id": "d09afc79-ae94-4b98-a125-1d1ad2d3aa84",
+      "name": "Alert Sales Channel",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1320,
+        0
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Normalize Lead').item.json.email }}",
+        "subject": "Thanks for getting in touch",
+        "emailType": "text",
+        "message": "=Hi {{ $('Normalize Lead').item.json.name || 'there' }},\n\nThanks for reaching out. We received your message and will reply within one business day.\n\n- YOUR_COMPANY_NAME",
+        "options": {}
+      },
+      "id": "9b516c73-899d-4ec4-995c-4b289850edf5",
+      "name": "Send Auto-Reply",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_GMAIL_CRED"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#automation-errors"
+        },
+        "text": "=:warning: Auto-reply failed for lead {{ $('Normalize Lead').item.json.email }}. The lead IS saved in the sheet; follow up manually.",
+        "otherOptions": {}
+      },
+      "id": "8e6d3a79-4bd5-4668-aa88-4fee56063e26",
+      "name": "Alert Auto-Reply Failed",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        160
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true } }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "c6ad9e80-c1b3-4da9-9023-40c0915beb8b",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1980,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "96ac34e8-22c6-47eb-ae34-b7d4e9b2692a",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#automation-errors"
+        },
+        "text": "=:rotating_light: *{{ $json.workflow.name }}* failed\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nExecution: {{ $json.execution.url }}\nTime: {{ $now.toISO() }}",
+        "otherOptions": {}
+      },
+      "id": "c46bc8a3-cd48-4df7-bfeb-2860d51220c3",
+      "name": "Alert Automation Errors",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        260,
+        420
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Lead Form Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify HMAC Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          {
+            "node": "Signature Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Valid?": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          {
+            "node": "Email Looks Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Looks Valid?": {
+      "main": [
+        [
+          {
+            "node": "Upsert Lead Row",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 422",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert Lead Row": {
+      "main": [
+        [
+          {
+            "node": "Alert Sales Channel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Sales Channel": {
+      "main": [
+        [
+          {
+            "node": "Send Auto-Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Auto-Reply": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Auto-Reply Failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Auto-Reply Failed": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Automation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

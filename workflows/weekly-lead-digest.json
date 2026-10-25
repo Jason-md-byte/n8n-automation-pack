@@ -1,0 +1,311 @@
+{
+  "name": "Weekly Lead Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Weekly Digest\nReads the Leads sheet written by the lead-capture workflow every Monday 08:00 (instance timezone) and posts a summary.\n\nReplace every YOUR_* value. See docs/weekly-lead-digest.md.",
+        "width": 460,
+        "height": 300
+      },
+      "id": "1f5f072d-44f4-459c-872a-8f9795b6d771",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "152c3eb8-c67d-4845-8d61-019f1289887c",
+      "name": "Every Monday 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SPREADSHEET_ID"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Leads"
+        },
+        "filtersUI": {},
+        "options": {}
+      },
+      "id": "e5be2313-da95-484f-8c01-5a71e52a890b",
+      "name": "Read Leads Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_GOOGLE_SHEETS_CRED"
+        }
+      },
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Summarise the last 7 days of leads. Escapes all sheet-sourced text.\nconst esc = (s) =>\n  String(s == null ? '' : s)\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n\nconst rows = $input.all().map((i) => i.json).filter((r) => r && r.email);\nconst cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;\nconst recent = rows.filter((r) => {\n  const t = Date.parse(r.received_at);\n  return !Number.isNaN(t) && t >= cutoff;\n});\n\nconst countBy = (key) =>\n  Object.entries(\n    recent.reduce((acc, r) => {\n      const k = r[key] || 'unknown';\n      acc[k] = (acc[k] || 0) + 1;\n      return acc;\n    }, {}),\n  ).sort((a, b) => b[1] - a[1]);\n\nconst bySource = countBy('source');\nconst byStatus = countBy('status');\nconst newest = [...recent]\n  .sort((a, b) => Date.parse(b.received_at) - Date.parse(a.received_at))\n  .slice(0, 5);\n\nconst li = (pairs) => pairs.map(([k, v]) => '<li>' + esc(k) + ': ' + v + '</li>').join('');\nconst html =\n  '<h2>Weekly lead digest</h2>' +\n  '<p><b>' + recent.length + '</b> new leads in the last 7 days (' + rows.length + ' total on file).</p>' +\n  '<h3>By source</h3><ul>' + li(bySource) + '</ul>' +\n  '<h3>By status</h3><ul>' + li(byStatus) + '</ul>' +\n  '<h3>Newest 5</h3><ul>' +\n  newest.map((r) => '<li>' + esc(r.name) + ' (' + esc(r.company) + ') - ' + esc(r.email) + '</li>').join('') +\n  '</ul>';\n\nconst line = (pairs) => pairs.map(([k, v]) => esc(k) + ' ' + v).join(', ') || 'none';\nconst slackText =\n  ':bar_chart: *Weekly lead digest*\\n' +\n  recent.length + ' new leads this week (' + rows.length + ' total)\\n' +\n  'Sources: ' + line(bySource) + '\\n' +\n  'Status: ' + line(byStatus);\n\nreturn [{ json: { total: rows.length, weekCount: recent.length, hasLeads: recent.length > 0, html, slackText } }];"
+      },
+      "id": "334cffaa-fb01-48aa-ae5c-7e1a77d9ea2e",
+      "name": "Build Weekly Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "16f7edb5-4f94-4fb5-a7d5-4ef626e899d2",
+              "leftValue": "={{ $json.hasLeads }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "436e66ee-5224-4cd7-b47c-13f57a44e084",
+      "name": "Any Leads This Week?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "YOUR_TEAM_EMAIL",
+        "subject": "=Weekly lead digest: {{ $json.weekCount }} new",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "2c0547b7-33a2-4c2f-8735-0361c1e303a2",
+      "name": "Email Digest",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        880,
+        -80
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_GMAIL_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales-leads"
+        },
+        "text": "={{ $json.slackText }}",
+        "otherOptions": {}
+      },
+      "id": "e896bdfa-85e4-4c1d-85c0-b6787f4bde6c",
+      "name": "Post Digest",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        80
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales-leads"
+        },
+        "text": ":zzz: No new leads were captured in the last 7 days. If that is unexpected, check the lead-capture workflow.",
+        "otherOptions": {}
+      },
+      "id": "7291c9cd-4c66-422d-a410-64ebe8a14d33",
+      "name": "Post Quiet Week",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        240
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "0c32c394-389d-482a-8708-207a9ddd493a",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#automation-errors"
+        },
+        "text": "=:rotating_light: *{{ $json.workflow.name }}* failed\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nExecution: {{ $json.execution.url }}\nTime: {{ $now.toISO() }}",
+        "otherOptions": {}
+      },
+      "id": "4d80357f-a8b2-4760-b0d1-bc7ad65db96b",
+      "name": "Alert Automation Errors",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        260,
+        420
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Monday 08:00": {
+      "main": [
+        [
+          {
+            "node": "Read Leads Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Leads Sheet": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Summary": {
+      "main": [
+        [
+          {
+            "node": "Any Leads This Week?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Leads This Week?": {
+      "main": [
+        [
+          {
+            "node": "Email Digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Post Digest",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post Quiet Week",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Automation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

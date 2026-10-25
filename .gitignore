@@ -1,0 +1,20 @@
+# Secrets and local config
+.env
+.env.*
+*.local.json
+credentials*.json
+*.pem
+*.key
+
+# Node / tooling
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# n8n local exports that may embed real credential ids
+exports-raw/

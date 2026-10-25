@@ -1,0 +1,415 @@
+{
+  "name": "Signup Enrichment + Hot Lead Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Signup Enrichment\nPOST signed JSON {email, first_name, last_name, company} to the webhook.\n\nRequired: env WEBHOOK_SECRET, NODE_FUNCTION_ALLOW_BUILTIN=crypto, N8N_BLOCK_ENV_ACCESS_IN_NODE=false.\n\nThe enrichment URL is a placeholder; point it at your provider and adapt the Score Lead mapping. See docs/signup-enrichment-hot-lead-alert.md.",
+        "width": 520,
+        "height": 320
+      },
+      "id": "6b2fdce5-cff6-4aac-b4ed-dc37870b079f",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -260
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "signup-enrich",
+        "authentication": "none",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "id": "0f5e6289-70cf-4715-a9f1-4c3a78dbf0a9",
+      "name": "Signup Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verifies an HMAC-SHA256 signature over \"<X-Timestamp>.<raw body>\".\n// Required headers: X-Timestamp (unix seconds), X-Signature (\"sha256=<hex>\").\n// Required env var: WEBHOOK_SECRET (also set NODE_FUNCTION_ALLOW_BUILTIN=crypto).\nconst crypto = require('crypto');\nconst MAX_SKEW_SECONDS = 300;\nconst headers = $input.first().json.headers || {};\nconst fail = (reason) => [{ json: { valid: false, reason } }];\n\nconst secret = $env.WEBHOOK_SECRET;\nif (!secret) return fail('server_misconfigured'); // fail closed\n\nconst timestamp = headers['x-timestamp'];\nconst provided = String(headers['x-signature'] || '').replace(/^sha256=/, '');\nif (!timestamp || !provided) return fail('missing_signature_headers');\n\nconst skew = Math.abs(Date.now() / 1000 - Number(timestamp));\nif (!Number.isFinite(skew) || skew > MAX_SKEW_SECONDS) return fail('stale_timestamp');\n\nconst raw = await this.helpers.getBinaryDataBuffer(0, 'data');\nconst expected = crypto\n  .createHmac('sha256', secret)\n  .update(timestamp + '.')\n  .update(raw)\n  .digest('hex');\n\nconst a = Buffer.from(provided, 'hex');\nconst b = Buffer.from(expected, 'hex');\nif (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return fail('bad_signature');\n\nlet payload;\ntry {\n  payload = JSON.parse(raw.toString('utf8'));\n} catch (e) {\n  return fail('invalid_json');\n}\nreturn [{ json: { valid: true, payload } }];"
+      },
+      "id": "7e1d8b30-1ba6-4fd6-86b2-c6a9a05dff1b",
+      "name": "Verify HMAC Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "753c945a-c0bd-4af6-ba97-77c67f8a32d2",
+              "leftValue": "={{ $json.valid }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0fde6693-518f-4f9f-b8eb-adb3491cd69b",
+      "name": "Signature Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": false, \"error\": \"unauthorized\" } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "128d9e37-c881-48db-a4f4-bf539a858805",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"ok\": true, \"status\": \"accepted\" } }}",
+        "options": {
+          "responseCode": 202
+        }
+      },
+      "id": "64707be9-c68e-423c-a114-09a6fd9d8591",
+      "name": "Respond 202",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.enrichment.example.com/v1/lookup",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $('Verify HMAC Signature').first().json.payload.email }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "d1623de3-f827-45b1-b48c-0bcfb8d46d85",
+      "name": "Enrich Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        880,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_ENRICHMENT_HEADER_AUTH_CRED"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine the original signup with enrichment data and compute a simple fit score.\n// Assumed enrichment response shape (adapt to your provider):\n//   { person: { title, linkedin_url }, company: { name, employees } }\nconst signup = $('Verify HMAC Signature').first().json.payload || {};\nconst res = $input.first().json || {};\nconst enriched = !res.error && (res.company || res.person);\nconst company = (res.company && res.company.name) || signup.company || '';\nconst employees = Number((res.company && res.company.employees) || 0);\nconst title = (res.person && res.person.title) || '';\nconst email = String(signup.email || '').trim().toLowerCase();\n\nconst freeMail = /@(gmail|yahoo|outlook|hotmail|icloud|proton)\\./i;\nlet score = 0;\nif (employees >= 200) score += 3;\nelse if (employees >= 50) score += 2;\nif (/(founder|owner|ceo|cto|coo|vp|head|director)/i.test(title)) score += 2;\nif (!freeMail.test(email)) score += 1;\n\nreturn [{\n  json: {\n    email,\n    firstName: String(signup.first_name || '').slice(0, 80),\n    lastName: String(signup.last_name || '').slice(0, 80),\n    company,\n    title,\n    employees,\n    linkedin: (res.person && res.person.linkedin_url) || '',\n    score,\n    hot: score >= 4,\n    enrichmentStatus: enriched ? 'ok' : 'failed_or_not_found',\n  },\n}];"
+      },
+      "id": "7f2c2fcb-3829-4498-b576-e7e0d10873e3",
+      "name": "Score Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "appToken",
+        "resource": "contact",
+        "operation": "upsert",
+        "email": "={{ $json.email }}",
+        "additionalFields": {
+          "firstName": "={{ $json.firstName }}",
+          "lastName": "={{ $json.lastName }}",
+          "companyName": "={{ $json.company }}",
+          "jobTitle": "={{ $json.title }}"
+        }
+      },
+      "id": "ce416caa-4ea5-4fec-987b-131921f769b9",
+      "name": "Upsert HubSpot Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "credentials": {
+        "hubspotAppToken": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_HUBSPOT_CRED"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "734dd491-9256-43eb-a2e3-20c4858ab38a",
+              "leftValue": "={{ $('Score Lead').item.json.hot }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e7d0cddb-35eb-4f05-a3ae-a2cb0952aca4",
+      "name": "Hot Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1540,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#sales-hot-leads"
+        },
+        "text": "=:fire: *Hot lead* (score {{ $('Score Lead').item.json.score }})\n{{ $('Score Lead').item.json.firstName }} {{ $('Score Lead').item.json.lastName }}, {{ $('Score Lead').item.json.title || 'title unknown' }} at {{ $('Score Lead').item.json.company || 'company unknown' }}\nEmployees: {{ $('Score Lead').item.json.employees || 'unknown' }}\nEnrichment: {{ $('Score Lead').item.json.enrichmentStatus }}\nLinkedIn: {{ $('Score Lead').item.json.linkedin || 'n/a' }}",
+        "otherOptions": {}
+      },
+      "id": "6365c729-6c62-40bf-a777-71d91695c36e",
+      "name": "Alert Sales: Hot Lead",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1760,
+        -80
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "087bd975-4594-4988-b747-2ce8b8bc7554",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#automation-errors"
+        },
+        "text": "=:rotating_light: *{{ $json.workflow.name }}* failed\nNode: {{ $json.execution.lastNodeExecuted }}\nError: {{ $json.execution.error.message }}\nExecution: {{ $json.execution.url }}\nTime: {{ $now.toISO() }}",
+        "otherOptions": {}
+      },
+      "id": "21026714-0507-474d-b2cc-8ec6cd3a636d",
+      "name": "Alert Automation Errors",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        260,
+        420
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "YOUR_CRED_ID",
+          "name": "YOUR_SLACK_CRED"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Signup Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify HMAC Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify HMAC Signature": {
+      "main": [
+        [
+          {
+            "node": "Signature Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signature Valid?": {
+      "main": [
+        [
+          {
+            "node": "Respond 202",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond 202": {
+      "main": [
+        [
+          {
+            "node": "Enrich Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich Contact": {
+      "main": [
+        [
+          {
+            "node": "Score Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Lead": {
+      "main": [
+        [
+          {
+            "node": "Upsert HubSpot Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upsert HubSpot Contact": {
+      "main": [
+        [
+          {
+            "node": "Hot Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot Lead?": {
+      "main": [
+        [
+          {
+            "node": "Alert Sales: Hot Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Automation Errors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
